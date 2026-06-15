@@ -137,6 +137,11 @@ export default defineConfig({
             title: 'Notatki / uzasadnienie',
             rows: 4,
           },
+          {
+            name: 'source',
+            type: 'url',
+            title: 'Źródło (URL)',
+          },
         ],
         preview: {
           select: { title: 'title', subtitle: 'date' },

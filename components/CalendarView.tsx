@@ -1,21 +1,15 @@
 'use client'
 
-import { useState, useMemo, useCallback } from 'react'
+import { useState, useMemo, useCallback, useEffect, useRef } from 'react'
+import { createPortal } from 'react-dom'
 import type { SanityEvent, EventType, Recommendation } from '@/types/event'
 import { EventModal } from './EventModal'
 
-const QUARTERS = [
-  { q: 1, label: 'Q1', months: [1, 2, 3] },
-  { q: 2, label: 'Q2', months: [4, 5, 6] },
-  { q: 3, label: 'Q3', months: [7, 8, 9] },
-  { q: 4, label: 'Q4', months: [10, 11, 12] },
+const MONTH_NAMES = [
+  'Styczeń','Luty','Marzec','Kwiecień','Maj','Czerwiec',
+  'Lipiec','Sierpień','Wrzesień','Październik','Listopad','Grudzień',
 ]
-
-const MONTH_NAMES: Record<number, string> = {
-  1: 'Styczeń', 2: 'Luty', 3: 'Marzec', 4: 'Kwiecień',
-  5: 'Maj', 6: 'Czerwiec', 7: 'Lipiec', 8: 'Sierpień',
-  9: 'Wrzesień', 10: 'Październik', 11: 'Listopad', 12: 'Grudzień',
-}
+const DAY_NAMES = ['Pon','Wt','Śr','Czw','Pt','Sob','Nd']
 
 const TYPE_OPTS: { label: string; value: EventType | 'all' }[] = [
   { label: 'Wszystko',   value: 'all' },
@@ -31,33 +25,109 @@ const POT_OPTS: { label: string; value: Recommendation | 'all' }[] = [
   { label: 'Średni',    value: 'srednia' },
 ]
 
-const VISIBLE_LIMIT = 4
-
-function extractMonth(date: string, quarter: number): number {
-  const m = date.match(/\d{1,2}\.(\d{2})\.2027/)
-  if (m) return parseInt(m[1])
-  if (date.toLowerCase().includes('early')) return 1
-  return (quarter - 1) * 3 + 1
+const TYPE_COLORS: Record<string, { pill: string; text: string; glow: string; border: string; dot: string }> = {
+  film:       { pill: 'rgba(139,92,246,0.22)',  text: '#c4b5fd', glow: '#7c3aed', border: 'rgba(139,92,246,0.4)',  dot: '#a78bfa' },
+  serial:     { pill: 'rgba(59,130,246,0.22)',  text: '#93c5fd', glow: '#2563eb', border: 'rgba(59,130,246,0.4)',  dot: '#60a5fa' },
+  gra:        { pill: 'rgba(234,179,8,0.2)',    text: '#fde68a', glow: '#ca8a04', border: 'rgba(234,179,8,0.4)',   dot: '#facc15' },
+  wydarzenie: { pill: 'rgba(244,63,94,0.2)',    text: '#fda4af', glow: '#e11d48', border: 'rgba(244,63,94,0.4)',   dot: '#fb7185' },
 }
 
-const POT_BORDER: Record<string, string> = {
-  wysoka:          '#111110',
-  srednia:         '#aaa',
-  'srednia-niska': '#ddd',
+function parseDate(s: string): Date | null {
+  const m = s.match(/(\d{1,2})\.(\d{2})\.(\d{4})/)
+  if (m) return new Date(+m[3], +m[2] - 1, +m[1])
+  const m2 = s.match(/(\d{4})-(\d{2})-(\d{2})/)
+  if (m2) return new Date(+m2[1], +m2[2] - 1, +m2[3])
+  return null
+}
+
+function getEventPos(e: SanityEvent) {
+  const d = parseDate(e.date)
+  if (d) return { year: d.getFullYear(), month: d.getMonth(), day: d.getDate() }
+  return { year: 2027, month: (e.quarter - 1) * 3, day: 1 }
+}
+
+function buildGrid(year: number, month: number) {
+  const first = new Date(year, month, 1).getDay()
+  const days  = new Date(year, month + 1, 0).getDate()
+  const offset = first === 0 ? 6 : first - 1
+  const cells: (number | null)[] = [
+    ...Array(offset).fill(null),
+    ...Array.from({ length: days }, (_, i) => i + 1),
+  ]
+  while (cells.length % 7) cells.push(null)
+  const weeks: (number | null)[][] = []
+  for (let i = 0; i < cells.length; i += 7) weeks.push(cells.slice(i, i + 7))
+  return weeks
+}
+
+// Popover rendered via portal so it escapes overflow:hidden
+function DayPopover({
+  events, anchorRect, onSelect, onClose,
+}: {
+  events: SanityEvent[]
+  anchorRect: DOMRect
+  onSelect: (e: SanityEvent) => void
+  onClose: () => void
+}) {
+  const ref = useRef<HTMLDivElement>(null)
+
+  useEffect(() => {
+    const h = (e: MouseEvent) => {
+      if (ref.current && !ref.current.contains(e.target as Node)) onClose()
+    }
+    document.addEventListener('mousedown', h)
+    return () => document.removeEventListener('mousedown', h)
+  }, [onClose])
+
+  const top = anchorRect.bottom + 4
+  const left = anchorRect.left
+
+  return createPortal(
+    <div ref={ref} style={{
+      position: 'fixed', top, left, zIndex: 300,
+      background: '#1a1530', border: '1px solid rgba(167,139,250,0.35)',
+      borderRadius: 10, padding: 6,
+      display: 'flex', flexDirection: 'column', gap: 3,
+      boxShadow: '0 8px 32px rgba(0,0,0,0.7)',
+      minWidth: 180, maxWidth: 240,
+    }}>
+      {events.map(ev => {
+        const c = TYPE_COLORS[ev.type] ?? TYPE_COLORS.film
+        return (
+          <button key={ev._id} onClick={() => { onSelect(ev); onClose() }}
+            style={{
+              width: '100%', textAlign: 'left',
+              borderRadius: 6, padding: '5px 8px',
+              background: c.pill, border: `1px solid ${c.border}`,
+              cursor: 'pointer', display: 'flex', alignItems: 'center', gap: 6,
+            }}>
+            <span style={{ width: 6, height: 6, borderRadius: '50%', background: c.dot, flexShrink: 0 }} />
+            <span style={{
+              fontSize: 11, fontWeight: 800, color: c.text,
+              overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
+            }}>{ev.title}</span>
+          </button>
+        )
+      })}
+    </div>,
+    document.body
+  )
 }
 
 interface Props { events: SanityEvent[] }
 
 export function CalendarView({ events }: Props) {
-  const [search,     setSearch]   = useState('')
-  const [typeFilter, setType]     = useState<EventType | 'all'>('all')
-  const [potFilter,  setPot]      = useState<Recommendation | 'all'>('all')
-  const [selected,   setSel]      = useState<SanityEvent | null>(null)
-  const [expanded,   setExpanded] = useState<Set<number>>(new Set())
+  const [month,      setMonth]  = useState(0)
+  const [typeFilter, setType]   = useState<EventType | 'all'>('all')
+  const [potFilter,  setPot]    = useState<Recommendation | 'all'>('all')
+  const [search,     setSearch] = useState('')
+  const [selected,   setSel]    = useState<SanityEvent | null>(null)
+  const [popover, setPopover]   = useState<{ key: string; rect: DOMRect; events: SanityEvent[] } | null>(null)
 
   const filtered = useMemo(() => events.filter(e => {
     if (typeFilter !== 'all' && e.type !== typeFilter)          return false
     if (potFilter  !== 'all' && e.recommendation !== potFilter) return false
+    if (e.buzz < 7)                                             return false
     if (search) {
       const q = search.toLowerCase()
       return e.title.toLowerCase().includes(q) || (e.studio ?? '').toLowerCase().includes(q)
@@ -65,200 +135,246 @@ export function CalendarView({ events }: Props) {
     return true
   }), [events, typeFilter, potFilter, search])
 
-  const byMonth = useMemo(() => {
-    const map = new Map<number, SanityEvent[]>()
+  const byDay = useMemo(() => {
+    const map = new Map<string, SanityEvent[]>()
     for (const e of filtered) {
-      const m = extractMonth(e.date, e.quarter)
-      if (!map.has(m)) map.set(m, [])
-      map.get(m)!.push(e)
+      const p = getEventPos(e)
+      const k = `${p.year}-${p.month}-${p.day}`
+      if (!map.has(k)) map.set(k, [])
+      map.get(k)!.push(e)
     }
     return map
   }, [filtered])
 
-  const maxCount = useMemo(() =>
-    Math.max(...Array.from(byMonth.values()).map(a => a.length), 1),
-  [byMonth])
-
-  const toggleExpand = useCallback((m: number) => {
-    setExpanded(prev => {
-      const next = new Set(prev)
-      next.has(m) ? next.delete(m) : next.add(m)
-      return next
-    })
-  }, [])
-
+  const grid = useMemo(() => buildGrid(2027, month), [month])
   const close = useCallback(() => setSel(null), [])
 
+  const numWeeks = grid.length
+
   return (
-    <div className="min-h-screen bg-paper flex flex-col">
+    <div style={{ display: 'flex', height: '100vh', overflow: 'hidden', background: '#0a0a0f' }}>
 
-      {/* Header */}
-      <header className="border-b border-rule bg-white px-8 py-4 flex items-center justify-between gap-6">
-        <div className="flex items-baseline gap-3">
-          <span className="text-base font-medium text-ink tracking-tight">RTM Events Calendar</span>
-          <span className="text-sm text-ink-3 font-light">2027</span>
+      {/* ── LEFT SIDEBAR ──────────────────────────────────── */}
+      <aside style={{
+        width: 220, flexShrink: 0, display: 'flex', flexDirection: 'column',
+        background: 'rgba(255,255,255,0.03)',
+        borderRight: '1px solid rgba(255,255,255,0.07)',
+        padding: '24px 18px',
+        gap: 28, overflowY: 'auto',
+      }}>
+        {/* Logo */}
+        <div>
+          <p style={{ fontSize: 10, fontWeight: 800, letterSpacing: '0.15em', textTransform: 'uppercase', color: 'rgba(255,255,255,0.3)', marginBottom: 6 }}>
+            Kalendarz Licencyjny
+          </p>
+          <h1 style={{ fontSize: 20, fontWeight: 900, color: '#fff', lineHeight: 1.15, margin: 0 }}>
+            RTM Events<br /><span style={{ color: '#a78bfa' }}>2027</span>
+          </h1>
         </div>
-        <div className="flex items-center gap-6 text-sm font-mono text-ink-2">
-          <span>{filtered.length} pozycji</span>
-          <span className="text-ink-3">·</span>
-          <span>{filtered.filter(e => e.recommendation === 'wysoka').length} wysoki potencjał</span>
-        </div>
-      </header>
 
-      {/* Filters */}
-      <div className="border-b border-rule bg-white px-8 py-2.5 flex flex-wrap items-center gap-5">
-        <input
-          type="text"
-          placeholder="Szukaj…"
-          value={search}
+        {/* Month navigation */}
+        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+          <button onClick={() => setMonth(m => Math.max(0, m - 1))} disabled={month === 0}
+            style={{
+              width: 28, height: 28, borderRadius: 7, border: '1px solid rgba(255,255,255,0.1)',
+              background: 'rgba(255,255,255,0.06)', color: 'white', fontSize: 15, fontWeight: 900,
+              cursor: month === 0 ? 'not-allowed' : 'pointer', opacity: month === 0 ? 0.3 : 1,
+              display: 'flex', alignItems: 'center', justifyContent: 'center',
+            }}>‹</button>
+          <span style={{ fontSize: 18, fontWeight: 900, color: '#fff' }}>{MONTH_NAMES[month]}</span>
+          <button onClick={() => setMonth(m => Math.min(11, m + 1))} disabled={month === 11}
+            style={{
+              width: 28, height: 28, borderRadius: 7, border: '1px solid rgba(255,255,255,0.1)',
+              background: 'rgba(255,255,255,0.06)', color: 'white', fontSize: 15, fontWeight: 900,
+              cursor: month === 11 ? 'not-allowed' : 'pointer', opacity: month === 11 ? 0.3 : 1,
+              display: 'flex', alignItems: 'center', justifyContent: 'center',
+            }}>›</button>
+        </div>
+
+        {/* Stats */}
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+          <div style={{ background: 'rgba(167,139,250,0.1)', border: '1px solid rgba(167,139,250,0.2)', borderRadius: 10, padding: '10px 14px' }}>
+            <p style={{ margin: '0 0 3px', fontSize: 10, fontWeight: 700, color: 'rgba(255,255,255,0.4)', textTransform: 'uppercase', letterSpacing: '0.1em' }}>Pozycji</p>
+            <p style={{ margin: 0, fontSize: 26, fontWeight: 900, color: '#fff' }}>{filtered.length}</p>
+          </div>
+          <div style={{ background: 'rgba(34,197,94,0.08)', border: '1px solid rgba(34,197,94,0.15)', borderRadius: 10, padding: '10px 14px' }}>
+            <p style={{ margin: '0 0 3px', fontSize: 10, fontWeight: 700, color: 'rgba(255,255,255,0.4)', textTransform: 'uppercase', letterSpacing: '0.1em' }}>Wysoki potencjał</p>
+            <p style={{ margin: 0, fontSize: 26, fontWeight: 900, color: '#86efac' }}>{filtered.filter(e => e.recommendation === 'wysoka').length}</p>
+          </div>
+        </div>
+
+        {/* Search */}
+        <input type="text" placeholder="Szukaj…" value={search}
           onChange={e => setSearch(e.target.value)}
-          className="text-xs text-ink placeholder:text-ink-3 border-b border-rule bg-transparent py-1 w-40 focus:outline-none focus:border-ink-2 font-sans"
-        />
-        <div className="flex items-center gap-0.5">
-          {TYPE_OPTS.map(o => (
-            <FilterBtn key={o.value} label={o.label}
-              active={typeFilter === o.value}
-              onClick={() => setType(o.value as EventType | 'all')} />
+          style={{
+            width: '100%', padding: '8px 11px', borderRadius: 9, boxSizing: 'border-box',
+            background: 'rgba(255,255,255,0.06)', border: '1px solid rgba(255,255,255,0.1)',
+            color: '#fff', fontSize: 13, fontWeight: 600, outline: 'none',
+          }} />
+
+        {/* Type filter */}
+        <div>
+          <p style={{ fontSize: 10, fontWeight: 800, letterSpacing: '0.12em', textTransform: 'uppercase', color: 'rgba(255,255,255,0.3)', marginBottom: 6 }}>Typ</p>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
+            {TYPE_OPTS.map(o => (
+              <SideBtn key={o.value} label={o.label}
+                active={typeFilter === o.value}
+                dot={o.value !== 'all' ? TYPE_COLORS[o.value]?.dot : undefined}
+                onClick={() => setType(o.value as EventType | 'all')} />
+            ))}
+          </div>
+        </div>
+
+        {/* Potential filter */}
+        <div>
+          <p style={{ fontSize: 10, fontWeight: 800, letterSpacing: '0.12em', textTransform: 'uppercase', color: 'rgba(255,255,255,0.3)', marginBottom: 6 }}>Potencjał</p>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
+            {POT_OPTS.map(o => (
+              <SideBtn key={o.value} label={o.label}
+                active={potFilter === o.value}
+                onClick={() => setPot(o.value as Recommendation | 'all')} />
+            ))}
+          </div>
+        </div>
+      </aside>
+
+      {/* ── CALENDAR ──────────────────────────────────────── */}
+      <main style={{ flex: 1, display: 'flex', flexDirection: 'column', overflow: 'hidden', padding: '16px' }}>
+
+        {/* Day headers */}
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(7, 1fr)', gap: 5, marginBottom: 5 }}>
+          {DAY_NAMES.map((d, i) => (
+            <div key={d} style={{
+              textAlign: 'center', padding: '4px 0',
+              fontSize: 10, fontWeight: 800, letterSpacing: '0.14em', textTransform: 'uppercase',
+              color: i >= 5 ? 'rgba(167,139,250,0.6)' : 'rgba(255,255,255,0.22)',
+            }}>{d}</div>
           ))}
         </div>
-        <div className="w-px h-4 bg-rule" />
-        <div className="flex items-center gap-0.5">
-          <span className="text-sm text-ink-3 mr-1.5">Potencjał</span>
-          {POT_OPTS.map(o => (
-            <FilterBtn key={o.value} label={o.label}
-              active={potFilter === o.value}
-              onClick={() => setPot(o.value as Recommendation | 'all')} />
-          ))}
-        </div>
-        <div className="ml-auto flex items-center gap-4 text-2xs text-ink-3">
-          <span className="flex items-center gap-1.5">
-            <span className="inline-block w-2.5 h-px bg-ink" />Wysoki
-          </span>
-          <span className="flex items-center gap-1.5">
-            <span className="inline-block w-2.5 h-px bg-ink-3" />Średni
-          </span>
-          <span className="flex items-center gap-1.5">
-            <span className="inline-block w-2.5 h-px bg-rule" />Niski
-          </span>
-        </div>
-      </div>
 
-      {/* Calendar — quarterly layout */}
-      <main className="flex-1 p-6 space-y-px">
-        {QUARTERS.map(({ q, label, months }) => (
-          <div key={q} className="flex">
-
-            {/* Q strip label */}
-            <div className="w-9 shrink-0 flex items-stretch border border-r-0 border-rule bg-white">
-              <div className="flex-1 flex items-center justify-center">
-                <span
-                  className="font-mono text-xs text-ink-3 tracking-widest select-none"
-                  style={{ writingMode: 'vertical-rl', transform: 'rotate(180deg)' }}
-                >
-                  {label}
-                </span>
-              </div>
-            </div>
-
-            {/* 3 month columns */}
-            <div className="flex-1 grid grid-cols-3 border border-rule">
-              {months.map((m, i) => {
-                const items   = byMonth.get(m) ?? []
-                const isExp   = expanded.has(m)
-                const visible = isExp ? items : items.slice(0, VISIBLE_LIMIT)
-                const hidden  = items.length - VISIBLE_LIMIT
-                const density = items.length / maxCount
+        {/* Calendar grid — equal rows via gridTemplateRows */}
+        <div style={{
+          flex: 1, minHeight: 0,
+          display: 'grid',
+          gridTemplateRows: `repeat(${numWeeks}, 1fr)`,
+          gap: 5,
+        }}>
+          {grid.map((week, wi) => (
+            <div key={wi} style={{ display: 'grid', gridTemplateColumns: 'repeat(7, 1fr)', gap: 5, minHeight: 0 }}>
+              {week.map((day, di) => {
+                const dayKey = `2027-${month}-${day}`
+                const dayEvs = day ? (byDay.get(dayKey) ?? []) : []
+                const isWeekend = di >= 5
+                const MAX_VISIBLE = 2
+                const visible = dayEvs.slice(0, MAX_VISIBLE)
+                const overflow = dayEvs.length - MAX_VISIBLE
+                const isOpen = popover?.key === dayKey
 
                 return (
-                  <div
-                    key={m}
-                    className="bg-white flex flex-col relative"
-                    style={{ borderLeft: i > 0 ? '1px solid #e4e4e0' : undefined }}
-                  >
-                    {/* Density bar */}
-                    <div className="h-0.5 bg-rule-2">
-                      <div
-                        className="h-0.5 bg-ink transition-all duration-300"
-                        style={{ width: `${Math.round(density * 100)}%`, opacity: 0.25 + density * 0.6 }}
-                      />
-                    </div>
+                  <div key={di} className={day ? 'day-tile' : ''} style={day ? {
+                    borderRadius: 10,
+                    background: dayEvs.length > 0
+                      ? 'rgba(255,255,255,0.055)' : 'rgba(255,255,255,0.02)',
+                    border: dayEvs.length > 0
+                      ? '1px solid rgba(255,255,255,0.09)' : '1px solid rgba(255,255,255,0.04)',
+                    padding: '7px 7px 5px',
+                    display: 'flex', flexDirection: 'column', gap: 3,
+                    overflow: 'hidden', minHeight: 0,
+                  } : {
+                    borderRadius: 10,
+                    background: 'rgba(255,255,255,0.01)',
+                    border: '1px solid rgba(255,255,255,0.02)',
+                    minHeight: 0,
+                  }}>
+                    {day && (
+                      <>
+                        <span style={{
+                          fontSize: 11, fontWeight: 900, lineHeight: 1,
+                          color: isWeekend ? 'rgba(167,139,250,0.65)' : 'rgba(255,255,255,0.38)',
+                          marginBottom: 2, flexShrink: 0,
+                        }}>{day}</span>
 
-                    {/* Month header */}
-                    <div className="px-4 pt-2.5 pb-2 flex items-baseline justify-between border-b border-rule-2">
-                      <span className="text-sm font-medium text-ink tracking-tight">{MONTH_NAMES[m]}</span>
-                      {items.length > 0 && (
-                        <span className="font-mono text-xs text-ink-3">{items.length}</span>
-                      )}
-                    </div>
+                        {visible.map(ev => {
+                          const c = TYPE_COLORS[ev.type] ?? TYPE_COLORS.film
+                          return (
+                            <button key={ev._id} onClick={() => setSel(ev)}
+                              style={{
+                                flexShrink: 0,
+                                width: '100%', textAlign: 'left',
+                                borderRadius: 6, padding: '3px 6px',
+                                background: c.pill, border: `1px solid ${c.border}`,
+                                cursor: 'pointer',
+                                display: 'flex', alignItems: 'center', gap: 4,
+                                overflow: 'hidden',
+                              }}>
+                              <span style={{ width: 5, height: 5, borderRadius: '50%', background: c.dot, flexShrink: 0 }} />
+                              <span style={{
+                                fontSize: 10, fontWeight: 800, color: c.text,
+                                overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
+                                display: 'block', flex: 1,
+                              }}>{ev.title}</span>
+                            </button>
+                          )
+                        })}
 
-                    {/* Stack shadow hint — shows depth when there are hidden items */}
-                    {items.length > VISIBLE_LIMIT && !isExp && (
-                      <div className="absolute inset-x-2 pointer-events-none" style={{ top: 38 }}>
-                        <div className="h-px bg-rule opacity-50 rounded-full" />
-                        <div className="h-px bg-rule opacity-30 rounded-full mt-0.5 mx-1" />
-                      </div>
+                        {overflow > 0 && (
+                          <button
+                            onClick={e => {
+                              const rect = (e.currentTarget as HTMLElement).getBoundingClientRect()
+                              if (isOpen) {
+                                setPopover(null)
+                              } else {
+                                setPopover({ key: dayKey, rect, events: dayEvs.slice(MAX_VISIBLE) })
+                              }
+                            }}
+                            style={{
+                              flexShrink: 0,
+                              width: '100%', textAlign: 'center',
+                              borderRadius: 6, padding: '2px 4px',
+                              background: isOpen ? 'rgba(167,139,250,0.25)' : 'rgba(167,139,250,0.1)',
+                              border: '1px solid rgba(167,139,250,0.3)',
+                              cursor: 'pointer', fontSize: 10, fontWeight: 800,
+                              color: '#c4b5fd',
+                            }}>
+                            +{overflow} więcej
+                          </button>
+                        )}
+                      </>
                     )}
-
-                    {/* Events */}
-                    <div className="flex-1 py-1">
-                      {items.length === 0 && (
-                        <p className="px-4 py-3 text-sm text-ink-3 font-light">—</p>
-                      )}
-                      {visible.map(ev => (
-                        <button
-                          key={ev._id}
-                          onClick={() => setSel(ev)}
-                          className="w-full text-left flex items-center hover:bg-hover transition-colors group"
-                        >
-                          <span
-                            className="shrink-0 w-0.5 self-stretch"
-                            style={{ background: POT_BORDER[ev.recommendation] ?? '#ddd' }}
-                          />
-                          <span className="flex-1 flex items-center justify-between gap-2 px-3 py-2">
-                            <span className="text-sm text-ink font-light leading-snug truncate">
-                              {ev.title}
-                            </span>
-                            <span className="font-mono text-xs text-ink-2 shrink-0 tabular-nums">
-                              {ev.buzz}
-                            </span>
-                          </span>
-                        </button>
-                      ))}
-
-                      {items.length > VISIBLE_LIMIT && (
-                        <button
-                          onClick={() => toggleExpand(m)}
-                          className="w-full text-left px-4 py-1.5 font-mono text-xs text-ink-3 hover:text-ink transition-colors"
-                        >
-                          {isExp ? '↑ zwiń' : `+ ${hidden} więcej`}
-                        </button>
-                      )}
-                    </div>
                   </div>
                 )
               })}
             </div>
-          </div>
-        ))}
+          ))}
+        </div>
       </main>
+
+      {/* Popover portal */}
+      {popover && (
+        <DayPopover
+          events={popover.events}
+          anchorRect={popover.rect}
+          onSelect={e => setSel(e)}
+          onClose={() => setPopover(null)}
+        />
+      )}
 
       {selected && <EventModal event={selected} onClose={close} />}
     </div>
   )
 }
 
-function FilterBtn({ label, active, onClick }: { label: string; active: boolean; onClick: () => void }) {
+function SideBtn({ label, active, onClick, dot }: { label: string; active: boolean; onClick: () => void; dot?: string }) {
   return (
-    <button
-      onClick={onClick}
-      className="text-sm px-3 py-1 rounded-sm transition-colors"
-      style={active
-        ? { background: '#111110', color: '#fff', fontWeight: 500 }
-        : { color: '#888887' }
-      }
-      onMouseEnter={e => { if (!active) (e.currentTarget as HTMLElement).style.color = '#111110' }}
-      onMouseLeave={e => { if (!active) (e.currentTarget as HTMLElement).style.color = '#888887' }}
-    >
+    <button onClick={onClick} style={{
+      width: '100%', textAlign: 'left', padding: '7px 10px', borderRadius: 7,
+      border: active ? '1px solid rgba(167,139,250,0.4)' : '1px solid transparent',
+      background: active ? 'rgba(167,139,250,0.15)' : 'transparent',
+      color: active ? '#e9d5ff' : 'rgba(255,255,255,0.45)',
+      fontSize: 13, fontWeight: 700, cursor: 'pointer',
+      display: 'flex', alignItems: 'center', gap: 8,
+    }}>
+      {dot && <span style={{ width: 6, height: 6, borderRadius: '50%', background: dot, flexShrink: 0 }} />}
       {label}
     </button>
   )

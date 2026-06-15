@@ -19,4 +19,5 @@ export interface SanityEvent {
   target?: string
   certainty?: Certainty
   notes?: string
+  source?: string
 }

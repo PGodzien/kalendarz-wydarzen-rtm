@@ -6,7 +6,8 @@
     "dev": "next dev",
     "build": "next build",
     "start": "next start",
-    "lint": "next lint"
+    "lint": "next lint",
+    "sync": "npx ts-node --project tsconfig.json -e \"require('dotenv').config({path:'.env.local'})\" scripts/sync.ts"
   },
   "dependencies": {
     "@sanity/client": "^6.22.0",
@@ -24,10 +25,12 @@
     "@types/react": "^18",
     "@types/react-dom": "^18",
     "autoprefixer": "^10",
+    "dotenv": "^17.4.2",
     "eslint": "^8",
     "eslint-config-next": "^14.2.5",
     "postcss": "^8",
     "tailwindcss": "^3.4.1",
+    "ts-node": "^10.9.2",
     "typescript": "^5"
   }
 }

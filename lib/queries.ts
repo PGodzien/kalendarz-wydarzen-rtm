@@ -18,6 +18,7 @@ export const eventsQuery = groq`
     target,
     certainty,
     notes,
+    source,
   }
 `
 
